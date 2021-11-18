@@ -38,13 +38,43 @@
 
 #include <nanos6/debug.h>
 #define FUNCPTR_T gemmsup_fp
-#define NTASKS	64
-
-const int BSX = 1;
+int OSS_TASKS;
+int OSS_TASKSCPU;
+int OSS_BSX;
+int OSS_BSY;
+int oss_5th;
+int oss_3rd;
 
 typedef struct mem_ompss{
 	struct mem_s mem_a_ompss;
 }mem_ompss_t;
+
+
+static bool parse_unsigned_long_oss(const char *name, int *pvalue)
+{
+	char *env, *end;
+	int value;
+
+	env = getenv(name);
+	if(env == NULL)
+		return 1;
+	
+	while(isspace((unsigned char) *env))
+		++env;
+	if(*env == '\0')
+		return 1;
+	
+	errno = 0;
+	value = strtoul(env, &end, 10);
+
+	while(isspace ((unsigned char) *end))
+		++end;
+	if(*end != '\0')
+		return 1;
+	*pvalue = value;
+	return 0;
+}
+
 
 typedef void (*FUNCPTR_T)
      (
@@ -85,7 +115,29 @@ void blx_gemm_ref_var2
        thrinfo_t* thread
      )
 {
+	/*oss: get environment variables to define the parallelization */
+	
+	if(parse_unsigned_long_oss("BLIS_OSS_TASKS", &OSS_TASKS) == 1){
+		printf("BLIS_OSS_TASKS not set.\nPlease, set: 'export BLIS_OSS_TASKS=NTASKS'\n");
+		printf("Using the default value: 64\n");
+		OSS_TASKS = 64;
+	}
+	
+	if(parse_unsigned_long_oss("BLIS_OSS_5TH", &oss_5th) == 1)
+		printf("Environment Variable BLIS_OSS_5TH not set\n"); 
+	else
+		printf("BLIS_OSS_5TH = %d\n", oss_5th);
 
+	if(parse_unsigned_long_oss("BLIS_OSS_3RD", &oss_3rd) == 1)
+		printf("Environment Variable BLIS_OSS_3RD not set\n"); 
+	else
+		printf("BLIS_OSS_3RD = %d\n", oss_3rd);
+	if(parse_unsigned_long_oss("BLIS_OSS_BSX", &OSS_BSX) == 1)
+		printf("Environment Variable BLIS_OSS_BSX not set\n");
+
+	if(parse_unsigned_long_oss("BLIS_OSS_BSY", &OSS_BSY) == 1)
+		printf("Environment Variable BLIS_OSS_BSY not set\n"); 
+	
 	if(bli_cntx_l3_vir_ukr_dislikes_storage_of( c, BLIS_GEMM_UKR, cntx ) )
         {
                 bli_obj_swap(a, b);
@@ -151,7 +203,7 @@ void blx_gemm_ref_var2
         const inc_t     cs_c    = bli_obj_col_stride( c );
 
         void* restrict buf_alpha = bli_obj_buffer_for_1x1( dt, alpha );
-        void* restrict buf_beta  = bli_obj_buffer_for_1x1( dt, beta );
+	void* restrict buf_beta  = bli_obj_buffer_for_1x1( dt, beta );
 
         // Index into the type combination array to extract the correct function pointer
         //FUNCPTR_T f = ftypes_var1n[dt];
@@ -259,7 +311,7 @@ BLIS_DENSE, \
         const dim_t NR = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_NR, cntx ); \
         const dim_t MR = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_MR, cntx ); \
         const dim_t NC = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_NC, cntx ); \
-        const dim_t MC = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_MC, cntx ); \
+        const dim_t MC = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_MC, cntx );  \
         const dim_t KC0 = bli_cntx_get_l3_sup_blksz_def_dt( dt, BLIS_KC, cntx ); \
 \
  	dim_t KC; \
@@ -332,50 +384,139 @@ BLIS_DENSE, \
         ctype           one_local = *PASTEMAC(ch,1); \
 \
         auxinfo_t       aux; \
-        /*Initialize a mem_t entry for A and B. Strictly speaking, this is only needed for the matrix we will be packing (if any),
-         but we do it unconditionally to be safe. */ \
-        /* mem_t mem_b = BLIS_MEM_INITIALIZER; */\
 \
         /* Determine whether we are using more than one thread. */ \
         /* Create and initialize the thread info */ \
         array_t* restrict array = bli_sba_checkout_array( 1 ); \
         bli_sba_rntm_set_pool( 0, array, rntm ); \
-        bli_membrk_rntm_set_membrk( rntm ); \
+        /*bli_membrk_rntm_set_membrk( rntm ); */\
+        bli_pba_rntm_set_pba( rntm ); \
         thrinfo_t* new_thread = bli_sba_acquire( rntm, sizeof( thrinfo_t ) ); \
 	bli_thrinfo_init_single(new_thread); \
 \
-        /* Compute the JC loop thread range for the current thread. */ \
+/*BLIS-OSS: DEFINING THE NUMBER OF TASKS */ \
+	/*dim_t OSS_NC = n/oss_3rd, OSS_MC = oss_3rd, OSS_KC = KC; */\
+	dim_t OSS_NC = NC, OSS_MC = MC, OSS_KC = KC; \
+	OSS_NC = n/oss_5th; \
+	OSS_MC = m/oss_3rd; \
+	int OSS_L3 = 11; \
+	if(n < 512){ \
+		OSS_L3 = 2; \
+	} else if(n >= 512 && n < 1024){ \
+		OSS_L3 = 4; \
+	}else if (n >= 1024 && n < 4096){ \
+		OSS_L3 = 6; \
+	} else{ \
+		OSS_L3 = 12; \
+	} \
+	if(m <= 512){ \
+		if(m <= 256){ \
+			OSS_MC = 36;  \
+			OSS_BSY = 4; \
+			OSS_BSX = 1; \
+		} else{ \
+			OSS_MC = 36; \
+			OSS_BSY = 1; \
+			OSS_BSX = 1; \
+		} \
+	} \
+	OSS_NC = n/OSS_L3; \
+	OSS_KC = KC; \
+	int OSS_BEST_TASKS = m/MC, OSS_NUM_TASKS_AUX=0, OSS_SOBRA_AUX=0, OSS_TOTAL_NUM_TASKS_AUX=0; \
+	if(m%MC != 0){ \
+		OSS_BEST_TASKS++; \
+	} \
+	int OSS_TOTAL_BEST_TASKS = OSS_BEST_TASKS * OSS_L3; \
+	int OSS_TOTAL_BEST_SOBRA = OSS_TOTAL_BEST_TASKS % OSS_TASKS; \
+	int OSS_BSY_BEST=0; \
+	if(m > 512){ \
+		OSS_MC = MC; \
+		OSS_BSY = 1; \
+		OSS_BSX = 1; \
+		for(OSS_BSY = 1; OSS_BSY <= 32; OSS_BSY = OSS_BSY*2){ \
+				OSS_NUM_TASKS_AUX = (m / (OSS_MC * OSS_BSY)); \
+				if( m%(OSS_MC*OSS_BSY) != 0) {\
+					OSS_NUM_TASKS_AUX++; \
+				} \
+				OSS_TOTAL_NUM_TASKS_AUX = OSS_NUM_TASKS_AUX * OSS_L3; \
+				OSS_SOBRA_AUX = OSS_TOTAL_NUM_TASKS_AUX % OSS_TASKS; \
+				if(OSS_SOBRA_AUX > OSS_TASKS/2){ \
+					OSS_SOBRA_AUX = OSS_TASKS - OSS_SOBRA_AUX; \
+				} \
+				if((OSS_SOBRA_AUX <= OSS_TOTAL_BEST_SOBRA)){ \
+					OSS_TOTAL_BEST_TASKS = OSS_TOTAL_NUM_TASKS_AUX; \
+					OSS_TOTAL_BEST_SOBRA = OSS_SOBRA_AUX; \
+					OSS_BSY_BEST = OSS_BSY; \
+				} \
+		} \
+		if(OSS_BSY_BEST > 0){ \
+			OSS_BSY = OSS_BSY_BEST; \
+		} else { \
+			OSS_BSY = 1; \
+		} \
+	} \
+	printf("OSS - INFORMATION\n"); \
+	if(m%OSS_MC == 0)\
+		printf("OSS - OSS_TOTAL_PARALLEL_TASKS = %ld\n", (n/OSS_NC) * (m/OSS_MC)); \
+	else \
+		printf("OSS - OSS_TOTAL_PARALLEL_TASKS = %ld\n", (n/OSS_NC) * ((m/OSS_MC)+1)); \
+	printf("OSS - OSS_NC = %ld\n", OSS_NC); \
+	printf("OSS - OSS_KC = %ld\n", OSS_KC); \
+	printf("OSS - OSS_MC = %ld\n", OSS_MC); \
+	printf("OSS - OSS_BSX = %d\n", OSS_BSX); \
+	printf("OSS - OSS_BSY = %d\n", OSS_BSY); \
+	\
+	/* Compute the JC loop thread range for the current thread. */ \
         dim_t jc_start = 0, jc_end = n; \
         const dim_t n_local = jc_end - jc_start; \
         /* Compute number of primary and leftover components of the JC loop. */ \
-        const dim_t jc_left = n_local % NC; \
+	const dim_t jc_left = n_local % OSS_NC; \
         \
 	\
 	\
 	/* Allocating mem_a pannel */ \
-        mem_ompss_t mem_new_a[NTASKS]; \
-	const dim_t m_pack = ( MC / MR + ( MC % MR ? 1 : 0 ) ) * MR; \
+        mem_ompss_t mem_new_a[OSS_TASKS]; \
+	const dim_t m_pack = ( OSS_MC / MR + ( OSS_MC % MR ? 1 : 0 ) ) * MR; \
 	const dim_t k_pack = KC; \
 	siz_t size_needed = sizeof(ctype) * m_pack * k_pack; \
-	for(int t=0; t < NTASKS; t++){ \
-		bli_membrk_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); \
-	} \
-	int size_mem_b = k / KC; \
-	mem_ompss_t mem_new_b[size_mem_b+1]; \
-	const dim_t kb_pack = k; \
-        const dim_t n_pack = ( n / NR + ( n % NR ? 1 : 0 ) ) * NR; \
-	siz_t size_needed_b = sizeof(ctype) * n_pack * kb_pack; \
-	for(int t=0; t <= size_mem_b; t++){ \
-		bli_membrk_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); \
+	for(int t=0; t < OSS_TASKS; t++){ \
+		/*bli_membrk_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); */\
+		bli_pba_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); \
 	} \
 \
 \
 \
         /* Loop over the m dimension (NC rows/columns at a time). */ \
-        for( dim_t jj = jc_start; jj < jc_end; jj += NC ) \
-        { \
-                /* Calculate the thread's current JC block dimension. */ \
-		const dim_t nc_cur = ( NC <= jc_end - jj ? NC : jc_left ); \
+	_Pragma("oss taskloop grainsize(OSS_BSX)") \
+        for( dim_t jj = jc_start; jj < jc_end; jj += OSS_NC ) \
+	{ \
+		const dim_t nc_cur = ( OSS_NC <= jc_end - jj ? OSS_NC : jc_left ); \
+		int size_mem_b = k / OSS_KC; \
+		if(k%OSS_KC != 0) \
+			size_mem_b++; \
+	        mem_ompss_t mem_new_b[size_mem_b]; \
+	        const dim_t kb_pack = k; \
+		const dim_t n_pack = ( nc_cur / NR + ( nc_cur % NR ? 1 : 0 ) ) * NR; \
+        	siz_t size_needed_b = sizeof(ctype) * n_pack * kb_pack;  \
+		if(k%KC == 0){ \
+			for(int t=0; t < size_mem_b; t++){ \
+		       	        /*bli_membrk_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); */\
+		       	        bli_pba_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); \
+		        }  \
+		} \
+		else{ \
+			int t; \
+			for(t=0; t < size_mem_b-1; t++){ \
+                       	        /*bli_membrk_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); */\
+                       	        bli_pba_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); \
+                       	}  \
+			dim_t k_left_new = k%OSS_KC; \
+			size_needed_b = sizeof(ctype) * n_pack * k_left_new; \
+			/*bli_membrk_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); */\
+			bli_pba_acquire_m( rntm, size_needed_b, BLIS_BUFFER_FOR_B_PANEL, &mem_new_b[t].mem_a_ompss ); \
+		}\
+\
+/*       		mem_t mem_b = BLIS_MEM_INITIALIZER; */ \
 \
                 ctype* restrict b_jc = b_00 + jj * jcstep_b; \
                 ctype* c_jc = c_00 + jj * jcstep_c; \
@@ -385,15 +526,16 @@ BLIS_DENSE, \
                 const dim_t k_local = k; \
 \
                 /* compute the number of primary and leftover components of the PC loop. */ \
-                const dim_t pc_left = k_local % KC; \
-\
-                /* Loop over the k dimension (KC rows/columns at a time). */ \
-		int id_mem_b = 0; \
-                for ( dim_t pp = pc_start; pp < pc_end; pp += KC ) \
+                const dim_t pc_left = k_local % OSS_KC; \
+		\
+		/* Loop over the k dimension (KC rows/columns at a time). */ \
+		int id_k = 0; \
+                for ( dim_t pp = pc_start; pp < pc_end; pp += OSS_KC ) \
                 { \
                         /* Calculate the thread's current PC block dimension. */ \
-                        const dim_t kc_cur = ( KC <= pc_end - pp ? KC : pc_left ); \
+                        const dim_t kc_cur = ( OSS_KC <= pc_end - pp ? OSS_KC : pc_left ); \
 \
+        		/* mem_t mem_b = BLIS_MEM_INITIALIZER; */\
                         ctype* restrict a_pc = a_00 + pp * pcstep_a; \
                         ctype* restrict b_pc = b_jc + pp * pcstep_b; \
 \
@@ -401,6 +543,7 @@ BLIS_DENSE, \
                         ctype* restrict beta_use = ( pp == 0 ? &beta_local : &one_local ); \
 \
                         ctype* b_use; \
+			ctype* restrict b_pc_use; \
                         inc_t rs_b_use, cs_b_use, ps_b_use; \
 \
                         /* Determine the packing buffer and related parameters for matrix
@@ -408,13 +551,13 @@ BLIS_DENSE, \
                            b and the _b_use strides will be set accordingly.) Then call
                            the packm sup variant chooser, which will call the appropriate
                            implementation based on the schema deduced from the stor_id. */ \
-                        PASTEMAC(ch, packm_sup_b) \
+			PASTEMAC(ch, packm_sup_b) \
                         ( \
                           packb,                                /* This algorithm packs matrix B */ \
                           BLIS_BUFFER_FOR_B_PANEL,              /* to a "panel of B" */ \
                           stor_id, \
                           BLIS_NO_TRANSPOSE, \
-                          KC, NC,                               /* This panel of B is (at most) KC x NC */ \
+                          OSS_KC, OSS_NC,                               /* This panel of B is (at most) KC x NC */ \
                           kc_cur, nc_cur, NR, \
                           &one_local, \
                           b_pc, rs_b, cs_b, \
@@ -422,39 +565,32 @@ BLIS_DENSE, \
                                                 & ps_b_use, \
                           cntx, \
                           rntm, \
-			  &mem_new_b[id_mem_b].mem_a_ompss, \
-                          /*&mem_b, */\
+			  &mem_new_b[id_k].mem_a_ompss,\
+   /*                       &mem_b, */ \
                           new_thread \
                         ); \
 \
-			id_mem_b++; \
+			id_k++; \
                         /* Alias a_use so that it's clear this this is our current block of matrix A. */ \
-                        ctype* restrict b_pc_use = b_use; \
+                        b_pc_use = b_use; \
 \
                         bli_auxinfo_set_ps_b( ps_b_use, &aux); \
-                        /* Grow the thrinfo_t tree */ \
 \
                         /* Compute the IC loop thread range for the current thread. */ \
 			dim_t ic_start = 0, ic_end = m; \
                         const dim_t m_local = ic_end - ic_start; \
 \
                         /* Compute number of primary and leftover components of the IC loop. */ \
-                        const dim_t ic_left = m_local % MC; \
+                        const dim_t ic_left = m_local % OSS_MC; \
 \
                         /* Loop over the m dimension ( MC rows at a time ). */ \
-			dim_t j; \
-			_Pragma("oss taskloop inout(c_jc[ii*ic_end]) grainsize(BSX)") \
-                        for ( dim_t ii = ic_start; ii < ic_end; ii += MC ) \
+                         _Pragma("oss taskloop for inout(c_jc[ii*icstep_c]) grainsize(1) chunksize(OSS_BSY)") \
+			for ( dim_t ii = ic_start; ii < ic_end; ii += OSS_MC ) \
                         { \
-				/* t_omp ++; */ \
-				/* _Pragma("oss task inout(mem_new_a[t_omp%NTASKS]) inout(c_jc[ii*icstep_c]) shared(b_pc_use)") */ \
-				/* _Pragma("oss task inout(c_jc[ii*icstep_c]) shared(b_pc_use)") */ \
-				/*{ */  \
-				unsigned int my_cpu = nanos6_get_current_virtual_cpu(); \
+				unsigned int OSS_MY_CPU = nanos6_get_current_virtual_cpu(); \
 				PASTEMAC(ch,set0s_mxn)(MR, NR, ct, rs_ct, cs_ct ); \
-				/*PASTEMAC(ch,set0s_mxn)(MR, NR, ct, rs_ct, cs_ct ); */ \
                                 /* Calculate the thread's current IC block dimension. */ \
-                                const dim_t mc_cur = ( MC <= ic_end - ii ? MC : ic_left ); \
+                                const dim_t mc_cur = ( OSS_MC <= ic_end - ii ? OSS_MC : ic_left ); \
 \
                                 ctype* restrict a_ic = a_pc + ii * icstep_a; \
                                 ctype* c_ic = c_jc + ii * icstep_c; \
@@ -482,7 +618,7 @@ BLIS_DENSE, \
                                   BLIS_BUFFER_FOR_A_BLOCK,      /* a "block of A" */ \
                                   stor_id, \
                                   BLIS_NO_TRANSPOSE, \
-                                  MC, KC,                       /* This block of A is (at most) MC x KC. */ \
+                                  OSS_MC, OSS_KC,                       /* This block of A is (at most) MC x KC. */ \
                                   mc_cur, kc_cur, MR, \
                                   &one_local, \
                                   a_ic, rs_a, cs_a, \
@@ -491,7 +627,7 @@ BLIS_DENSE, \
                                   cntx, \
                                   rntm, \
                                   /* &mem_new_a[t_omp%NTASKS].mem_a_ompss, */ \
-                                  &mem_new_a[my_cpu].mem_a_ompss,  \
+                                  &mem_new_a[OSS_MY_CPU].mem_a_ompss,  \
                                   new_thread \
                                 ); \
 \
@@ -522,7 +658,7 @@ BLIS_DENSE, \
                                 dim_t jr_start = 0, jr_end = jr_iter, jr_inc=1; \
 \
                                 /* Loop over the n dimension (NR columns at a time */ \
-                                for( j = jr_start; j < jr_end; j += jr_inc ) \
+                                for( dim_t j = jr_start; j < jr_end; j += jr_inc ) \
                                 { \
                                         ctype* restrict b2; \
                                         const dim_t nr_cur = ( bli_is_not_edge_f( j, jr_iter, jr_left ) ? NR : jr_left ); \
@@ -587,12 +723,21 @@ BLIS_DENSE, \
                                                 } \
 					} \
 				} \
-                        } \
+			} \
                 } \
+		for(int t = 0; t < size_mem_b; t++){ \
+		PASTEMAC(ch,packm_sup_finalize_mem_b) \
+       		( \
+          		packb, \
+		        rntm,  \
+		        &mem_new_b[t].mem_a_ompss, \
+			new_thread \
+        	); \
+		} \
         } \
 	_Pragma("oss taskwait") \
         /* Release any memory that was acquired for packing matrices A and B. */ \
-        for(int t_omp = 0; t_omp < NTASKS; t_omp++){ \
+        for(int t_omp = 0; t_omp < OSS_TASKS; t_omp++){ \
 		PASTEMAC(ch,packm_sup_finalize_mem_a) \
 	        ( \
 	        	packa, \
@@ -600,15 +745,6 @@ BLIS_DENSE, \
 	        	&mem_new_a[t_omp].mem_a_ompss, \
 	        	new_thread \
 	        ); \
-	} \
-        for(int t_omp = 0; t_omp <= size_mem_b; t_omp++){ \
-		PASTEMAC(ch,packm_sup_finalize_mem_b) \
-       		( \
-          		packb, \
-		        rntm, \
-		        &mem_new_b[t_omp].mem_a_ompss, \
-			new_thread \
-        	); \
 	} \
 }
 

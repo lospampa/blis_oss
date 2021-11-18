@@ -202,12 +202,6 @@ get-sandbox-cxxtext-for = "('$(1)' CXXFLAGS for sandboxes)"
 files-that-contain      = $(strip $(foreach f, $(1), $(if $(findstring $(2),$(f)),$(f),)))
 files-that-dont-contain = $(strip $(foreach f, $(1), $(if $(findstring $(2),$(f)),,$(f))))
 
-# Define a function that removes duplicate words from a list.
-# NOTE: This function was obtained via [1]; thanks bobbogo for this
-# concise definition.
-# [1] https://stackoverflow.com/questions/16144115/makefile-remove-duplicate-words-without-sorting
-rm-dupls = $(if $1,$(firstword $1) $(call rm-dupls,$(filter-out $(firstword $1),$1)))
-
 
 #
 # --- Include makefile configuration file --------------------------------------
@@ -500,7 +494,8 @@ LIBMEMKIND := -lmemkind
 
 # Default linker flags.
 # NOTE: -lpthread is needed unconditionally because BLIS uses pthread_once()
-# to initialize itself in a thread-safe manner.
+# to initialize itself in a thread-safe manner. The one exception to this
+# rule: if --disable-system is given at configure-time, LIBPTHREAD is empty.
 LDFLAGS    := $(LDFLAGS_PRESET) $(LIBM) $(LIBPTHREAD)
 
 # Add libmemkind to the link-time flags, if it was enabled at configure-time.
@@ -731,6 +726,10 @@ $(foreach c, $(CONFIG_LIST_FAM), $(eval $(call append-var-for,CPPROCFLAGS,$(c)))
 
 # --- Threading flags ---
 
+# NOTE: We don't have to explicitly omit -pthread when --disable-system is given
+# since that option forces --enable-threading=none, and thus -pthread never gets
+# added to begin with.
+
 ifeq ($(CC_VENDOR),gcc)
 ifeq ($(THREADING_MODEL),auto)
 THREADING_MODEL := openmp
@@ -814,7 +813,7 @@ endif
 #
 
 ifeq ($(OS_NAME),Linux)
-LDFLAGS += -lrt -fompss-2 
+LDFLAGS += -lrt -fompss-2
 endif
 
 
