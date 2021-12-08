@@ -1,0 +1,12 @@
+1) Clone BLIS from the following link: https://github.com/flame/blis
+2) Access the following directory: blis/sandbox/
+3) Clone OmpSs-2 implementations from the following link: https://github.com/lospampa/blis_oss
+4) Copy the configure files from OmpSs-2 directory to the BLIS directory: cp cfg_files/* blis/
+5) Configure the version to be installed:
+  * load modules with OmpSs-2 llvm
+  * export CC=clang
+  * export CXX=clang++
+  * ./configure --prefix=BUILD_DIR_BLIS --enable-sandbox=VERSION --enable-threading=openmp auto
+  * make -jN
+  * make install
+  
