@@ -40,7 +40,7 @@
 #define FUNCPTR_T gemmsup_fp
 int OSS_TASKS;
 int OSS_TASKSCPU;
-int OSS_CORES=64;
+int OSS_CORES=40;
 int OSS_BSX;
 int OSS_BSY;
 int oss_5th;
@@ -119,7 +119,7 @@ void blx_gemm_ref_var2
 	/*oss: get environment variables to define the parallelization */
 	
 	if(parse_unsigned_long_oss("BLIS_OSS_TASKS", &OSS_TASKS) == 1){
-		OSS_TASKS = 64; /* change here accordingly to the number of cores available in the architecture */
+		OSS_TASKS = 40; /* change here accordingly to the number of cores available in the architecture */
 	}
 	
         const num_t     dt      = bli_obj_dt( c );
@@ -365,8 +365,8 @@ BLIS_DENSE, \
         /* Create and initialize the thread info */ \
         array_t* restrict array = bli_sba_checkout_array( 1 ); \
         bli_sba_rntm_set_pool( 0, array, rntm ); \
-        /*bli_membrk_rntm_set_membrk( rntm ); */\
-        bli_pba_rntm_set_pba( rntm ); \
+        bli_membrk_rntm_set_membrk( rntm ); \
+        /*bli_pba_rntm_set_pba( rntm ); */\
         thrinfo_t* new_thread = bli_sba_acquire( rntm, sizeof( thrinfo_t ) ); \
 	bli_thrinfo_init_single(new_thread); \
 \
@@ -429,6 +429,16 @@ BLIS_DENSE, \
 			OSS_BSY = 1; \
 		} \
 	} \
+	printf("OSS - INFORMATION\n"); \
+        if(m%OSS_MC == 0)\
+                printf("OSS - OSS_TOTAL_PARALLEL_TASKS = %ld\n", (n/OSS_NC) * (m/OSS_MC)); \
+        else \
+                printf("OSS - OSS_TOTAL_PARALLEL_TASKS = %ld\n", (n/OSS_NC) * ((m/OSS_MC)+1)); \
+        printf("OSS - OSS_NC = %ld\n", OSS_NC); \
+        printf("OSS - OSS_KC = %ld\n", OSS_KC); \
+        printf("OSS - OSS_MC = %ld\n", OSS_MC); \
+        printf("OSS - OSS_BSX = %d\n", OSS_BSX); \
+        printf("OSS - OSS_BSY = %d\n", OSS_BSY); \
 	\
 	/* Compute the JC loop thread range for the current thread. */ \
         dim_t jc_start = 0, jc_end = n; \
@@ -444,8 +454,8 @@ BLIS_DENSE, \
 	const dim_t k_pack = KC; \
 	siz_t size_needed = sizeof(ctype) * m_pack * k_pack; \
 	for(int t=0; t < OSS_CORES; t++){ \
-		/*bli_membrk_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); */\
-		bli_pba_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); \
+		bli_membrk_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); \
+		/*bli_pba_acquire_m(rntm, size_needed, BLIS_BUFFER_FOR_A_BLOCK, &mem_new_a[t].mem_a_ompss); */\
 	} \
 \
 \
