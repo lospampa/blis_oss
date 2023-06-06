@@ -813,7 +813,7 @@ endif
 #
 
 ifeq ($(OS_NAME),Linux)
-LDFLAGS += -lrt -lnanos6 -L/apps/PM/ompss-2/git/lib
+LDFLAGS += -lrt -fompss-2 -g
 endif
 
 
